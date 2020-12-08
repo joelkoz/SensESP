@@ -2,8 +2,8 @@
 
 #include "ReactESP.h"
 
-ClickType::ClickType(String config_path, long long_click_delay,
-                     long double_click_interval, long ultra_long_click_delay)
+ClickType::ClickType(String config_path, unsigned long long_click_delay,
+                     unsigned long double_click_interval, unsigned long ultra_long_click_delay)
     : Transform<bool, ClickTypes>(config_path),
       click_count{0},
       long_click_delay{long_click_delay},
