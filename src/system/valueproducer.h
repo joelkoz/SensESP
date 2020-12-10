@@ -49,6 +49,27 @@ class ValueProducer : virtual public Observable {
     connect_to(consumer, input_channel);
   }
 
+
+  /**
+   * If the consumer this producer is connecting to is a producer of a
+   * different type than is being consumed, and you would like to chain
+   * your calls to connect_to(), switching to that new type, this
+   * version of connect_to allows you to specify the type of ValueProducer
+   * you want to use next.
+   * <p>This template version also helps when using classes that do not
+   * inherit directly from `Transform<>`.
+   * @tparam The data type of the ValueProducer that you want to use. This
+   *   could also be thought of as the data type of the ValueConsumer in
+   *   your NEXT call to connect_to() 
+   */
+  template <typename T2>
+  ValueProducer<T2>* connect_to(ValueConsumer<T>* consumer, uint8_t input_channel = 0) {
+    this->attach([this, consumer, input_channel]() {
+      consumer->set_input(this->get(), input_channel);
+    });
+  }
+
+
   /**
    *  If the consumer this producer is connecting to is ALSO a producer
    *  of values of the same type, connect_to() calls can be chained
