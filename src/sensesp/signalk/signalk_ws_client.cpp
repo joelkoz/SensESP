@@ -408,6 +408,36 @@ void SKWSClient::process_received_updates() {
   SKListener::release_semaphore();
 }
 
+void SKWSClient::queue_put_response(const String& request_id, const char* state,
+                                    int status_code,
+                                    const String& message) {
+  const String response_state = state;
+  event_loop()->onDelay(0, [this, request_id, response_state, status_code,
+                            message]() {
+    if (request_id.isEmpty()) {
+      ESP_LOGW(__FILENAME__,
+               "Skipping PUT response send because requestId is empty");
+      return;
+    }
+
+    JsonDocument put_response;
+    put_response["requestId"] = request_id;
+    put_response["state"] = response_state;
+    put_response["statusCode"] = status_code;
+    if (!message.isEmpty()) {
+      put_response["message"] = message;
+    }
+
+    String response_text;
+    serializeJson(put_response, response_text);
+    ESP_LOGW(__FILENAME__,
+             "Sending PUT response requestId=%s state=%s code=%d payload=%s",
+             request_id.c_str(), response_state.c_str(), status_code,
+             response_text.c_str());
+    sendTXT(response_text);
+  });
+}
+
 /**
  * @brief Called when a PUT event is received.
  *
@@ -417,19 +447,29 @@ void SKWSClient::process_received_updates() {
  */
 void SKWSClient::on_receive_put(JsonDocument& message) {
   // Process PUT requests...
-  JsonArray puts = message["put"];
+  const String request_id = message["requestId"].is<JsonVariant>()
+                                ? message["requestId"].as<String>()
+                                : "";
   bool all_matched = true;
-  for (size_t i = 0; i < puts.size(); i++) {
-    JsonObject value = puts[i];
+  size_t put_count = 0;
+
+  const auto process_put_value = [this, &put_count, &all_matched, &request_id](
+                                     const JsonObject& value) {
+    put_count++;
+
     const char* path = value["path"];
+    const char* path_cstr = path == nullptr ? "" : path;
     bool matched = false;
+
+    ESP_LOGW(__FILENAME__, "Received PUT request path=%s requestId=%s",
+             path_cstr, request_id.c_str());
 
     SKListener::take_semaphore();
     const std::vector<SKPutListener*>& listeners =
         SKPutListener::get_listeners();
     for (size_t j = 0; j < listeners.size(); j++) {
       SKPutListener* listener = listeners[j];
-      if (listener->get_sk_path().equals(path)) {
+      if (listener->get_sk_path().equals(path_cstr)) {
         take_received_updates_semaphore();
         constexpr size_t kMaxReceivedUpdates = 20;
         while (received_updates_.size() >= kMaxReceivedUpdates) {
@@ -446,28 +486,28 @@ void SKWSClient::on_receive_put(JsonDocument& message) {
 
     if (!matched) {
       all_matched = false;
+      ESP_LOGW(__FILENAME__, "No PUT listener matched path=%s", path_cstr);
     }
+  };
+
+  if (message["put"].is<JsonArray>()) {
+    JsonArray puts = message["put"];
+    for (size_t i = 0; i < puts.size(); i++) {
+      process_put_value(puts[i].as<JsonObject>());
+    }
+  } else if (message["put"].is<JsonObject>()) {
+    process_put_value(message["put"].as<JsonObject>());
   }
 
-  // Send back a single request response if still connected
-  if (get_connection_state() == SKWSConnectionState::kSKWSConnected) {
-    JsonDocument put_response;
-    put_response["requestId"] = message["requestId"];
-    if (all_matched) {
-      put_response["state"] = "COMPLETED";
-      put_response["statusCode"] = 200;
-    } else {
-      put_response["state"] = "FAILED";
-      put_response["statusCode"] = 405;
-    }
-    String response_text;
-    serializeJson(put_response, response_text);
-    int result = esp_websocket_client_send_text(
-        client_, response_text.c_str(), response_text.length(),
-        kWsSendTimeoutTicks);
-    if (result < 0) {
-      ESP_LOGE(__FILENAME__, "PUT response send failed (result=%d)", result);
-    }
+  if (put_count == 0) {
+    ESP_LOGW(__FILENAME__, "Malformed PUT request with no values to process");
+    queue_put_response(request_id, "FAILED", 400,
+                       "Malformed PUT request payload");
+  } else if (all_matched) {
+    queue_put_response(request_id, "COMPLETED", 200);
+  } else {
+    queue_put_response(request_id, "FAILED", 405,
+                       "No matching PUT listener");
   }
 }
 

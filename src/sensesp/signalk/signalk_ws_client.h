@@ -216,6 +216,8 @@ class SKWSClient : public FileSystemSaveable,
   // main task methods
 
   void process_received_updates();
+  void queue_put_response(const String& request_id, const char* state,
+                          int status_code, const String& message = "");
 
   /////////////////////////////////////////////////////////
   // SKWSClient task methods
