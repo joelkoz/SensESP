@@ -6,6 +6,7 @@
 #include "Arduino.h"
 #include "Print.h"
 
+#ifndef USE_REMOTE_DEBUG
 #define rdebugA(fmt, ...) ESP_LOGV(__FILENAME__, fmt, ##__VA_ARGS__)
 #define rdebugP(fmt, ...) ESP_LOGV(__FILENAME__, fmt, ##__VA_ARGS__)
 #define rdebugV(fmt, ...) ESP_LOGV(__FILENAME__, fmt, ##__VA_ARGS__)
@@ -13,6 +14,7 @@
 #define rdebugI(fmt, ...) ESP_LOGI(__FILENAME__, fmt, ##__VA_ARGS__)
 #define rdebugW(fmt, ...) ESP_LOGW(__FILENAME__, fmt, ##__VA_ARGS__)
 #define rdebugE(fmt, ...) ESP_LOGE(__FILENAME__, fmt, ##__VA_ARGS__)
+#endif 
 
 // With newline
 
@@ -26,13 +28,14 @@
 
 // New way: To compatibility with SerialDebug (can use RemoteDebug or
 // SerialDebug) This is my favorite :)
-
+#ifndef USE_REMOTE_DEBUG
 #define debugV(fmt, ...) rdebugV(fmt, ##__VA_ARGS__)
 #define debugD(fmt, ...) rdebugD(fmt, ##__VA_ARGS__)
 #define debugI(fmt, ...) rdebugI(fmt, ##__VA_ARGS__)
 #define debugW(fmt, ...) rdebugW(fmt, ##__VA_ARGS__)
 #define debugE(fmt, ...) rdebugE(fmt, ##__VA_ARGS__)
 #define debugA(fmt, ...) rdebugV(fmt, ##__VA_ARGS__)
+#endif
 
 namespace sensesp {
 
