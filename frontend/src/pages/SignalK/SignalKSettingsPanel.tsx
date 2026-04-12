@@ -85,6 +85,7 @@ function SKConnectionSettings({
   setConfig,
   onSave,
 }: SKConnectionSettingsProps): JSX.Element {
+  const [saving, setSaving] = useState(false);
   const id = useId();
 
   const mdns = config.use_mdns === true;
@@ -156,12 +157,15 @@ function SKConnectionSettings({
             <button
               type="submit"
               className="btn btn-primary"
-              onClick={(e) => {
+              disabled={saving}
+              onClick={async (e) => {
                 e.preventDefault();
-                void onSave();
+                setSaving(true);
+                await onSave();
+                setSaving(false);
               }}
             >
-              Save
+              {saving ? "Saving..." : "Save"}
             </button>
           </form>
         </div>
@@ -181,10 +185,14 @@ function SKAuthToken({
   setConfig,
   onSave,
 }: SKAuthTokenProps): JSX.Element {
-  function handleClearToken(): void {
+  const [clearing, setClearing] = useState(false);
+
+  async function handleClearToken(): Promise<void> {
     const newConfig = { ...config, token: "" };
     setConfig(newConfig);
-    void onSave(newConfig);
+    setClearing(true);
+    await onSave(newConfig);
+    setClearing(false);
   }
 
   return (
@@ -193,8 +201,12 @@ function SKAuthToken({
         Click the button to clear the Signal K authentication token. This causes
         the device to request re-authorization from the Signal K server.
       </p>
-      <button className="btn btn-primary" onClick={handleClearToken}>
-        Clear Token
+      <button
+        className="btn btn-primary"
+        disabled={clearing}
+        onClick={handleClearToken}
+      >
+        {clearing ? "Clearing..." : "Clear Token"}
       </button>
     </Card>
   );
@@ -213,6 +225,7 @@ function SKSSLSettings({
   onSave,
   onConfigUpdate,
 }: SKSSLSettingsProps): JSX.Element {
+  const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
   const id = useId();
 
@@ -319,12 +332,15 @@ function SKSSLSettings({
           <button
             type="submit"
             className="btn btn-primary"
-            onClick={(e) => {
+            disabled={saving}
+            onClick={async (e) => {
               e.preventDefault();
-              void onSave();
+              setSaving(true);
+              await onSave();
+              setSaving(false);
             }}
           >
-            Save
+            {saving ? "Saving..." : "Save"}
           </button>
         </form>
       </div>
