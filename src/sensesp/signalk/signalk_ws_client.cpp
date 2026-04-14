@@ -586,11 +586,14 @@ void SKWSClient::connect() {
   // Will be reset on successful connection.
   schedule_reconnect();
 
-  if (!WiFi.isConnected() && WiFi.getMode() != WIFI_MODE_AP) {
-    ESP_LOGI(
-        __FILENAME__,
-        "WiFi is disconnected. SignalK client connection will be initiated "
-        "when WiFi is connected.");
+  // Wait for the active network provisioner (WiFi, Ethernet, …) to be
+  // up before initiating the WS connection. The provisioner abstracts
+  // away whether we're on WiFi, Ethernet, or some other transport.
+  auto provisioner = SensESPApp::get()->get_network_provisioner();
+  if (!provisioner || !provisioner->is_connected()) {
+    ESP_LOGI(__FILENAME__,
+             "Network is not yet up. SignalK client connection will be "
+             "initiated when the link comes up.");
     return;
   }
 
@@ -974,11 +977,14 @@ void SKWSClient::poll_access_request(const String server_address,
       }
     }
   } else {
-    if (http_code == 500) {
-      // this is probably the server barfing due to
-      // us polling a non-existing request. Just
-      // delete the polling href.
-      ESP_LOGD(__FILENAME__, "Got 500, probably a non-existing request.");
+    if (http_code == 404 || http_code == 500) {
+      // Server doesn't recognize this request (stale href after
+      // server restart, different server, or security disabled).
+      // Clear the polling href so the next connect cycle starts
+      // a fresh access-request flow.
+      ESP_LOGD(__FILENAME__,
+               "Got %d polling access request — clearing stale href.",
+               http_code);
       polling_href_ = "";
       save();
       set_connection_state(SKWSConnectionState::kSKWSDisconnected);

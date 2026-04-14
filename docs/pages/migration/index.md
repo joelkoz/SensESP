@@ -1,6 +1,6 @@
 ---
 layout: default
-title: Migrating From Version 1
+title: Migrating from Previous Versions
 nav_order: 70
 ---
 
@@ -59,7 +59,7 @@ For example, `ReactESP` class should be referred to as
 `reactesp::EventLoop`. In particular, this change probably needs to be made
 in your project's `main.cpp` file.
 
-SensESP uses the [ReactESP](https:://github.com/mairas/ReactESP) framework for event-based programming. In previous versions, the ReactESP "app" object had to be instantiated in the main program file. This is no longer the case, and SensESP will take care of this for you. Remove any line such as
+SensESP uses the [ReactESP](https://github.com/mairas/ReactESP) framework for event-based programming. In previous versions, the ReactESP "app" object had to be instantiated in the main program file. This is no longer the case, and SensESP will take care of this for you. Remove any line such as
 ```c++
 reactesp::ReactESP app;
 ```
@@ -80,30 +80,6 @@ event_loop()->onRepeat(
 
 SensESP v3 has removed the `Startable` class. In previous versions, you would have `sensesp_app->start();` as the last line in your `setup()` function. This is no longer necessary. If you need to initialize something after the `setup()` function has finished, create a zero-delay event: `event_loop()->onDelay(0, []() { /* your code here */ });`.
 
-Logging initialization has changed. At the beginning of your `setup()` function, remove these lines:
-
-```c++
-#ifndef SERIAL_DEBUG_DISABLED
-  SetupSerialDebug(115200);
-#endif
-```
-and replace them with this line:
-```c++
-SetupLogging();
-```
-In `platformio.ini`, replace the `build_flags` definition with this:
-```ini
-build_flags =
-   -D LED_BUILTIN=2
-   ; Max (and default) debugging level in Arduino ESP32 Core
-   -D CORE_DEBUG_LEVEL=ARDUHAL_LOG_LEVEL_VERBOSE
-   ; Arduino Core bug workaround: define the log tag for the Arduino
-   ; logging macros.
-   -D TAG='"ARDUINO"'
-   ; Use the ESP-IDF logging library - required by SensESP.
-   -D USE_ESP_IDF_LOG
-```
-
 See the next section how to update your code to the new config item system.
 
 ### Exposing Sensors, Transforms, and Outputs to the Web Interface
@@ -121,6 +97,33 @@ ConfigItem(input_calibration)
 analog_input->connect_to(input_calibration);
 ```
 
+### New Transforms
+
+SensESP v3 adds several new transform classes. For detailed usage, see the [Concepts](../concepts/) page.
+
+- `ExpiringValue` — output expires after a given duration unless updated
+- `Repeat` — repeats the last input value at a fixed interval
+- `RepeatStopping` — repeats the input value, stopping after a given time
+- `RepeatExpiring` — repeats the input value, emitting a `Nullable<T>` null after expiration
+- `RepeatConstantRate` — repeats at a constant rate regardless of input rate, using `Nullable<T>`
+- `Join` — combines multiple inputs into a tuple, emitting when any input updates
+- `Zip` — combines multiple inputs into a tuple, emitting only when all inputs have updated
+- `Filter` — passes the input value through only if it satisfies a predicate
+- `Throttle` — limits the rate of output emissions
+- `Hysteresis` — emits a boolean output based on upper and lower thresholds
+
+### StatusPageItem
+
+`UIOutput` and `UILambdaOutput` have been renamed to `StatusPageItem`. Unlike the old classes, `StatusPageItem` is a `ValueConsumer`, so you can connect a producer to it directly rather than polling with a lambda.
+
+### Nullable\<T\>
+
+`Nullable<T>` is a wrapper type that represents a value that may be invalid. It is used by `RepeatExpiring` and `RepeatConstantRate` to signal that a repeated value has expired (the output becomes null/invalid). Downstream consumers can check whether the value is valid before acting on it.
+
+### Smart Pointers
+
+Smart pointers (`std::shared_ptr`) are used internally throughout SensESP v3, reducing the risk of memory leaks and dangling pointer crashes. Using smart pointers in your own code is supported but not required.
+
 ### Logging
 
 Previous SensESP versions logged to the serial port using the `debugX` functions, where `X` is the log level.
@@ -128,19 +131,7 @@ This pattern was inherited from the RemoteDebug library.
 SensESP v3 has switched to using standard ESP-IDF logging functions.
 They allow redirecting log messages to different outputs, which will be used in future SensESP versions to provide logging to the web interface.
 
-To enable logging in SensESP v3, change the `build_flags` in your `platformio.ini` file to include the following:
-
-```ini
-build_flags =
-   -D LED_BUILTIN=2
-   ; Max (and default) debugging level in Arduino ESP32 Core
-   -D CORE_DEBUG_LEVEL=ARDUHAL_LOG_LEVEL_VERBOSE
-   ; Arduino Core bug workaround: define the log tag for the Arduino
-   ; logging macros.
-   -D TAG='"ARDUINO"'
-   ; Use the ESP-IDF logging library - required by SensESP.
-   -D USE_ESP_IDF_LOG
-```
+Adjust your build_flags and setup function as described in the Quick Changes section above.
 
 The `debugX` functions are still available, but they are now just wrappers around the ESP-IDF logging functions.
 In any new code, use the `ESP_LOGX` functions, where `X` is the log level.
@@ -165,10 +156,6 @@ ESP_LOGD(__FILE__, "Sending value %d to fobulator %s", value, fobulator_name);
 ...
 ESP_LOGE(__FILE__, "Failed to initialize NMEA2000");
 ```
-
-To enable logging in previous SensESP versions, you had to call `SetupSerialDebug(115200)` as the first line in your `setup()` function.
-In new SensESP versions, replace this with the new `SetupLogging()` function call to set logging defaults.
-The old `SetupSerialDebug` function is still available, but it is now just a wrapper around `SetupLogging`.
 
 It is possible to change the log level for individual tags.
 Here is an example of how to set the overall log level to `INFO` and the log level for the `main.cpp` tag to `DEBUG`:
@@ -345,3 +332,71 @@ sensesp_app = builder.enable_free_mem_sensor()
                      ->enable_ota("my_password")
                      ->get_app();
 ```
+
+## Transport-agnostic networking (v3 minor update)
+
+SensESP used to assume WiFi was the only way to reach the Signal K
+server. The networking layer has been refactored to be transport-
+agnostic: WiFi is still the default and existing sketches compile
+and behave identically, but the library can now also run over
+native Ethernet (on ESP32-P4) and is ready for future transports.
+The refactor RFC is [#849](https://github.com/SignalK/SensESP/issues/849).
+
+### No action required for WiFi users
+
+Every public class name, enum name, and builder method that existed
+before still works via compatibility typedefs:
+
+| Old name                          | New name                               |
+|-----------------------------------|----------------------------------------|
+| `Networking`                      | `WiFiProvisioner`                      |
+| `WiFiState` (enum)                | `NetworkState`                         |
+| `WiFiStateProducer`               | `NetworkStateProducer`                 |
+| `SensESPApp::get_networking()`    | `SensESPApp::get_wifi_provisioner()`   |
+
+The kept aliases mean a user sketch like
+
+```c++
+auto state = sensesp_app->get_networking()->get_wifi_state_producer();
+```
+
+compiles unchanged against the new release.
+
+### Optional: switch to the new names
+
+For new code or if you want to use the new transport-agnostic API,
+prefer:
+
+```c++
+// Include the concrete header directly (not "networking.h")
+#include "sensesp/net/wifi_provisioner.h"
+#include "sensesp/net/network_state.h"
+
+// Access the provisioner through its new accessor
+auto wifi = sensesp_app->get_wifi_provisioner();
+
+// Or, for code that should work on any transport, use the
+// NetworkProvisioner base and the unified state producer:
+auto provisioner = sensesp_app->get_network_provisioner();
+auto ip  = provisioner->local_ip();
+auto mac = provisioner->mac_address();
+
+auto state_producer = sensesp_app->get_network_state_producer();
+state_producer->connect_to(&my_consumer);
+```
+
+### Static-IP WiFi configurations
+
+If you use a saved static-IP configuration on a WiFi client, the
+release in which this refactor lands also fixes a long-standing bug
+in `WiFiProvisioner::start_client_autoconnect()` where the arguments
+to `WiFi.config()` were passed in the wrong order — silently setting
+`gateway = DNS server`, `subnet = gateway`, and `DNS1 = netmask`. If
+your saved WiFi client config has `useDHCP: false`, verify your
+gateway / netmask / DNS values look correct after upgrading; existing
+saved configs should actually start working for the first time.
+
+### Adding Ethernet
+
+See `docs/pages/features/index.md` (section "Network transports")
+for a short usage example.
