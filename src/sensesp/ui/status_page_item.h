@@ -21,6 +21,12 @@ class StatusPageItemBase {
   StatusPageItemBase(String name, String group, int order)
       : name_(name), group_(group), order_(order) {}
 
+  /**
+   * Unregisters this item from the static registry so the registry never
+   * holds a dangling pointer.
+   */
+  virtual ~StatusPageItemBase();
+
   String& get_name() { return name_; }
 
   virtual JsonDocument as_json() = 0;
@@ -28,6 +34,12 @@ class StatusPageItemBase {
   static const std::map<String, StatusPageItemBase*>* get_status_page_items() {
     return &status_page_items_;
   }
+
+  /**
+   * Empties the status page item registry. Intended for clean app restart and
+   * test isolation; not for normal runtime use.
+   */
+  static void clear_registry();
 
  protected:
   String name_;
@@ -51,9 +63,13 @@ class StatusPageItem : public StatusPageItemBase, public ObservableValue<T> {
   StatusPageItem(String name, const T& value, String group, int order)
       : StatusPageItemBase(name, group, order), ObservableValue<T>(value) {
           if (status_page_items_.count(name) > 0) {
-            ESP_LOGW("StatusPageItem", "Duplicate status page item name: %s", name.c_str());
+            ESP_LOGW("StatusPageItem",
+                     "Duplicate status page item name: %s; keeping the first "
+                     "registration and ignoring this one",
+                     name.c_str());
+          } else {
+            status_page_items_[name] = this;
           }
-          status_page_items_[name] = this;
   }
 
   protected:

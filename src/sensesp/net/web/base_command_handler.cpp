@@ -1,6 +1,11 @@
 #include "base_command_handler.h"
 
+#include <cerrno>
+#include <cstdint>
+#include <cstdlib>
+
 #include "sensesp/net/web/autogen/frontend_files.h"
+#include "sensesp/system/log_buffer.h"
 #include "sensesp/ui/status_page_item.h"
 #include "sensesp_app.h"
 
@@ -9,26 +14,44 @@ namespace sensesp {
 namespace {
 
 /// Reject cross-origin POST requests to destructive endpoints.
+///
+/// Compares the Origin header's authority (host[:port]) against the request's
+/// own Host header. The Host header reflects whatever interface the browser
+/// actually used, so this is same-origin for every access path — soft-AP IP,
+/// station IP, mDNS name, or custom DNS — without a hardcoded allowlist.
+/// Requests without an Origin header (non-browser clients) are allowed.
+///
+/// An Origin or Host that does not fit the buffer is rejected rather than
+/// treated as absent: a legitimate same-origin request to this device is always
+/// short, so an over-long header can only be a forgery attempt and must fail
+/// closed.
 bool check_origin(httpd_req_t* req) {
-  char origin[128] = {0};
-  if (httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) ==
-      ESP_OK) {
-    String origin_str(origin);
-    String hostname = SensESPBaseApp::get_hostname();
-    if (origin_str.indexOf(hostname) < 0) {
-      // Check the active provisioner's local IP — works for both WiFi
-      // and Ethernet without depending on the WiFi library directly.
-      auto provisioner = SensESPApp::get()->get_network_provisioner();
-      String ip =
-          provisioner ? provisioner->local_ip().toString() : String("");
-      if (ip.length() == 0 || origin_str.indexOf(ip) < 0) {
-        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN,
-                            "Cross-origin request rejected");
-        return false;
-      }
-    }
+  if (httpd_req_get_hdr_value_len(req, "Origin") == 0) {
+    return true;
   }
-  return true;
+
+  char origin[128] = {0};
+  char host[128] = {0};
+  if (httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) !=
+          ESP_OK ||
+      httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) != ESP_OK) {
+    httpd_resp_send_err(req, HTTPD_403_FORBIDDEN,
+                        "Cross-origin request rejected");
+    return false;
+  }
+
+  String origin_str(origin);
+  int scheme_end = origin_str.indexOf("://");
+  String origin_authority =
+      scheme_end < 0 ? origin_str : origin_str.substring(scheme_end + 3);
+
+  if (origin_authority == host) {
+    return true;
+  }
+
+  httpd_resp_send_err(req, HTTPD_403_FORBIDDEN,
+                      "Cross-origin request rejected");
+  return false;
 }
 
 }  // namespace
@@ -84,11 +107,70 @@ void add_http_info_handler(std::shared_ptr<HTTPServer>& server) {
   server->add_handler(info_handler);
 }
 
+void add_http_log_handler(std::shared_ptr<HTTPServer>& server) {
+  auto log_handler = std::make_shared<HTTPRequestHandler>(
+      1 << HTTP_GET, "/api/log", [](httpd_req_t* req) {
+        LogBuffer* log_buffer = LogBuffer::instance();
+        httpd_resp_set_type(req, "application/json; charset=utf-8");
+        if (log_buffer == nullptr) {
+          httpd_resp_sendstr(
+              req, "{\"session\":0,\"next\":0,\"gap\":false,\"lines\":[]}");
+          return ESP_OK;
+        }
+
+        // Access control: none of its own, like /api/info. The only gate is the
+        // dispatcher's HTTP auth, which is off by default — so /api/log mirrors
+        // the serial log to anyone who can reach the web server unless web auth
+        // is enabled. check_origin() is anti-CSRF for destructive POSTs and
+        // gives no read protection, so it is not used here.
+        uint32_t since = 0;
+        bool has_since = false;
+        size_t query_len = httpd_req_get_url_query_len(req) + 1;
+        if (query_len > 1 && query_len <= 64) {
+          char query[64];
+          if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+            char value[16];
+            if (httpd_query_key_value(query, "since", value, sizeof(value)) ==
+                ESP_OK) {
+              // Accept only a clean, in-range unsigned integer; ignore garbage
+              // so a stale or crafted cursor cannot corrupt the client's view.
+              char* end = nullptr;
+              errno = 0;
+              unsigned long parsed = strtoul(value, &end, 10);
+              if (end != value && *end == '\0' && errno == 0 &&
+                  parsed <= UINT32_MAX) {
+                since = static_cast<uint32_t>(parsed);
+                has_since = true;
+              }
+            }
+          }
+        }
+
+        LogSnapshot snapshot = log_buffer->snapshot_since(since, has_since);
+
+        JsonDocument json_doc;
+        json_doc["session"] = snapshot.session_id;
+        json_doc["next"] = snapshot.next;
+        json_doc["gap"] = snapshot.gap;
+        JsonArray lines = json_doc["lines"].to<JsonArray>();
+        for (const auto& line : snapshot.lines) {
+          lines.add(line.c_str());
+        }
+
+        String response;
+        serializeJson(json_doc, response);
+        httpd_resp_sendstr(req, response.c_str());
+        return ESP_OK;
+      });
+  server->add_handler(log_handler);
+}
+
 void add_routes_handlers(std::shared_ptr<HTTPServer>& server) {
   std::vector<RouteDefinition> routes;
 
   routes.push_back(RouteDefinition("Status", "/status", "StatusPage"));
   routes.push_back(RouteDefinition("System", "/system", "SystemPage"));
+  routes.push_back(RouteDefinition("Log", "/log", "LogPage"));
   routes.push_back(RouteDefinition("WiFi", "/wifi", "WiFiConfigPage"));
   routes.push_back(RouteDefinition("Signal K", "/signalk", "SignalKPage"));
   routes.push_back(
@@ -97,8 +179,6 @@ void add_routes_handlers(std::shared_ptr<HTTPServer>& server) {
   // Pre-render the response
   JsonDocument json_doc;
   JsonArray routes_json = json_doc.to<JsonArray>();
-
-  int sz = routes.size();
 
   for (auto it = routes.begin(); it != routes.end(); ++it) {
     routes_json.add(it->as_json());
@@ -152,6 +232,7 @@ void add_base_app_http_command_handlers(std::shared_ptr<HTTPServer>& server) {
   add_http_reset_handler(server);
   add_http_restart_handler(server);
   add_http_info_handler(server);
+  add_http_log_handler(server);
   add_routes_handlers(server);
 }
 

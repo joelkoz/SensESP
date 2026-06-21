@@ -1,11 +1,19 @@
 name: SensESP CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         device:
           - esp32
@@ -23,7 +31,9 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.platformio/.cache
-          key: ${{ runner.os }}-pio
+          key: ${{ runner.os }}-pio-${{ matrix.platform }}-${{ matrix.device }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-${{ matrix.platform }}-${{ matrix.device }}-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -39,23 +49,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         example:
           - examples/minimal_app.cpp
           - examples/rpm_counter.cpp
           - examples/ssl_connection.cpp
+        platform:
+          - pioarduino
         device:
           - esp32
-          - esp32c3
-        platform:
-          - arduino
-          - pioarduino
-        exclude:
-          - platform: arduino
-            device: esp32c3
-          # SSL example requires pioarduino (SENSESP_SSL_SUPPORT)
-          - platform: arduino
-            example: examples/ssl_connection.cpp
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
@@ -63,7 +66,9 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.platformio/.cache
-          key: ${{ runner.os }}-pio
+          key: ${{ runner.os }}-pio-build-${{ matrix.platform }}-${{ matrix.device }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-build-${{ matrix.platform }}-${{ matrix.device }}-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

@@ -70,6 +70,8 @@ std::shared_ptr<ConfigItemT<T>> ConfigItem(std::shared_ptr<T>);
 class ConfigItemBase
     : virtual public std::enable_shared_from_this<ConfigItemBase> {
  public:
+  virtual ~ConfigItemBase() = default;
+
   const String& get_title() const { return title_; }
   ConfigItemBase* set_title(const String& title) {
     title_ = title;
@@ -160,6 +162,20 @@ class ConfigItemBase
 
     return sorted_config_items;
   }
+
+  /**
+   * @brief Empty the config item registry.
+   *
+   * Releases the registry's shared_ptr references. Intended for clean app
+   * restart and test isolation; not for normal runtime use.
+   *
+   * Unlike the raw-pointer registries (SKEmitter, Transform, StatusPageItem),
+   * this registry owns its entries via shared_ptr, so there is no
+   * unregister-on-destruction: clearing the map releases the objects. A
+   * self-erasing destructor here would be re-entrant and is deliberately
+   * absent.
+   */
+  static void clear_registry();
 
   virtual bool load() = 0;
   virtual bool refresh() = 0;
@@ -295,7 +311,22 @@ std::shared_ptr<ConfigItemT<T>> ConfigItem(std::shared_ptr<T> config_object) {
   return config_item;
 }
 
-// Unsafe: We don't know whether other shared_ptrs to the same object exist!
+/**
+ * @brief Register a ConfigItemT, transferring ownership of a raw pointer.
+ *
+ * Convenience overload for the `new T(...)` idiom used throughout the
+ * examples. It wraps @p config_object in a `std::shared_ptr` and registers
+ * it, so the configuration registry becomes the sole owner.
+ *
+ * @warning This overload TAKES OWNERSHIP. The caller must pass a pointer that
+ * is not owned by anyone else: allocate it with `new` and never `delete` it,
+ * never wrap it in another `std::shared_ptr`, and never pass a pointer to a
+ * stack or member object. Violating this causes a double free. When in doubt,
+ * use the `std::shared_ptr<T>` overload and keep ownership explicit.
+ *
+ * The raw-pointer ownership model is a v3 carry-over; the planned v4 ownership
+ * refactor (#900) removes it. See #893.
+ */
 template <typename T>
 std::shared_ptr<ConfigItemT<T>> ConfigItem(T* config_object) {
   auto config_object_sptr = std::shared_ptr<T>(config_object);
