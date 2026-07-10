@@ -27,12 +27,24 @@ struct LogRecord {
 inline constexpr size_t kLogCaptureLineMax = 256;
 /// Depth of the lock-free handoff queue between the vprintf hook and the
 /// capture task. Bursts beyond this drop lines rather than block the logger.
-inline constexpr size_t kLogCaptureQueueDepth = 16;
+inline constexpr size_t kLogCaptureQueueDepth = 8;
 /// Stack (bytes) and priority of the capture task. The task does the
-/// heap-allocating work the hook offloads, so its stack must be roomy;
-/// priority 1 matches the other SensESP service tasks.
-inline constexpr uint32_t kLogCaptureTaskStackSize = 4096;
+/// heap-allocating work the hook offloads (ANSI strip + std::string build + a
+/// largest-free-block probe). Measured worst case ~0.7 KB used on an ESP32-C3;
+/// 3072 keeps a conservative margin because this task allocates under memory
+/// pressure. Priority 1 matches the other SensESP service tasks.
+inline constexpr uint32_t kLogCaptureTaskStackSize = 3072;
 inline constexpr UBaseType_t kLogCaptureTaskPriority = 1;
+/// Minimum largest-free-block (bytes) required before the capture path will
+/// allocate. Below this, push_line() drops the line instead of building the
+/// std::string/deque record. With C++ exceptions disabled (the default on
+/// ESP32) a failed allocation throws std::bad_alloc, which routes to abort()
+/// and reboots the device -- so the logger must never be the allocation that
+/// exhausts the heap, least of all while capturing the errors that report the
+/// pressure. The margin is far larger than one line (<= kLogCaptureLineMax plus
+/// a deque node) to stay clear of the check-then-allocate race and to leave
+/// contiguous heap for the TLS Signal K connection.
+inline constexpr size_t kLogCaptureMinHeadroomBytes = 8192;
 
 /// One formatted line in transit from the vprintf hook to the capture task.
 /// Copied by value through the queue, so the hook allocates nothing.
@@ -87,8 +99,9 @@ class LogBuffer {
   // max_line_length defaults to kLogCaptureLineMax to match the capture buffer
   // in vprintf_trampoline(); a larger value cannot recover more than that
   // buffer already captured.
-  explicit LogBuffer(size_t max_lines = 200, uint32_t max_age_ms = 2000,
-                     size_t max_line_length = kLogCaptureLineMax);
+  explicit LogBuffer(size_t max_lines = 100, uint32_t max_age_ms = 2000,
+                     size_t max_line_length = kLogCaptureLineMax,
+                     size_t min_headroom_bytes = kLogCaptureMinHeadroomBytes);
 
   /**
    * @brief Install the chained vprintf hook. Call once, early in startup.
@@ -142,6 +155,7 @@ class LogBuffer {
   size_t max_lines_;
   uint32_t max_age_ms_;
   size_t max_line_length_;
+  size_t min_headroom_bytes_;
 
   std::deque<LogRecord> records_;
   uint32_t next_seq_ = 0;
